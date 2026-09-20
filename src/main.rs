@@ -1,4 +1,5 @@
 mod db;
+mod history;
 
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -100,9 +101,17 @@ impl App {
         let database = self.selected_database();
         let sql = self.editor.lines().join("\n");
         let runs = self.runs.parse().unwrap_or(1).max(1);
+        let name = self.name.clone();
         let sender = self.sender.clone();
         thread::spawn(move || {
-            let result = db::benchmark(&database, &sql, runs, &sender).unwrap_or_else(db::message);
+            let result = match db::benchmark(&database, &sql, runs, &sender) {
+                Ok(times) => {
+                    let saved = history::save(&db::host(), &database, &name, &sql, &times);
+                    let note = saved.err().map(|error| format!("\nhistory not saved: {error}")).unwrap_or_default();
+                    db::summary(times) + &note
+                }
+                Err(error) => db::message(error),
+            };
             let _ = sender.send(result);
         });
     }

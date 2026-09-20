@@ -1,10 +1,14 @@
 use postgres::{Client, Config, Error, NoTls};
 use std::{env, sync::mpsc::Sender, time::Instant};
 
+pub fn host() -> String {
+    env::var("PGHOST").unwrap_or("localhost".into())
+}
+
 fn connect(database: &str) -> Result<Client, Error> {
     let var = |name, default: &str| env::var(name).unwrap_or(default.into());
     Config::new()
-        .host(&var("PGHOST", "localhost"))
+        .host(&host())
         .port(var("PGPORT", "5432").parse().unwrap_or(5432))
         .user(&var("PGUSER", "postgres"))
         .password(var("PGPASSWORD", "postgres"))
@@ -19,7 +23,7 @@ pub fn list_databases() -> Result<Vec<String>, Error> {
     Ok(rows.iter().map(|row| row.get(0)).collect())
 }
 
-pub fn benchmark(database: &str, sql: &str, runs: usize, progress: &Sender<String>) -> Result<String, Error> {
+pub fn benchmark(database: &str, sql: &str, runs: usize, progress: &Sender<String>) -> Result<Vec<f64>, Error> {
     let mut client = connect(database)?;
     let mut times = Vec::new();
     for run in 1..=runs {
@@ -29,7 +33,7 @@ pub fn benchmark(database: &str, sql: &str, runs: usize, progress: &Sender<Strin
         times.push(ms);
         let _ = progress.send(format!("{run}/{runs}   last {ms:.2} ms"));
     }
-    Ok(summary(times))
+    Ok(times)
 }
 
 pub fn message(error: Error) -> String {
@@ -39,7 +43,7 @@ pub fn message(error: Error) -> String {
     }
 }
 
-fn summary(mut times: Vec<f64>) -> String {
+pub fn summary(mut times: Vec<f64>) -> String {
     times.sort_by(f64::total_cmp);
     let last = times.len() - 1;
     format!(
