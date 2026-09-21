@@ -1,5 +1,6 @@
-use postgres::{Client, Config, Error, NoTls};
-use std::{env, sync::mpsc::Sender, time::Instant};
+use postgres::{CancelToken, Client, Config, Error, NoTls};
+use std::sync::{mpsc::Sender, Mutex};
+use std::{env, time::Instant};
 
 pub fn host() -> String {
     env::var("PGHOST").unwrap_or("localhost".into())
@@ -23,8 +24,15 @@ pub fn list_databases() -> Result<Vec<String>, Error> {
     Ok(rows.iter().map(|row| row.get(0)).collect())
 }
 
-pub fn benchmark(database: &str, sql: &str, runs: usize, progress: &Sender<String>) -> Result<Vec<f64>, Error> {
+pub fn benchmark(
+    database: &str,
+    sql: &str,
+    runs: usize,
+    progress: &Sender<String>,
+    cancel: &Mutex<Option<CancelToken>>,
+) -> Result<Vec<f64>, Error> {
     let mut client = connect(database)?;
+    *cancel.lock().unwrap() = Some(client.cancel_token());
     let mut times = Vec::new();
     for run in 1..=runs {
         let start = Instant::now();

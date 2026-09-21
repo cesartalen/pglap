@@ -8,10 +8,11 @@ use ratatui::widgets::{Block, List, ListState, Paragraph, Wrap};
 use ratatui::Frame;
 use ratatui_textarea::TextArea;
 use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::{error::Error, fs, thread, time::Duration};
 
 const QUERIES: &str = "queries";
-const HELP: &str = " tab: focus   enter: load query   ctrl+r: run   ctrl+s: save   ctrl+q: quit";
+const HELP: &str = " tab: focus   enter: load query   ctrl+r: run   esc: cancel   ctrl+s: save   ctrl+q: quit";
 
 #[derive(Clone, Copy, PartialEq)]
 enum Focus {
@@ -34,6 +35,7 @@ struct App {
     result: String,
     sender: Sender<String>,
     receiver: Receiver<String>,
+    cancel: Arc<Mutex<Option<postgres::CancelToken>>>,
 }
 
 impl App {
@@ -51,6 +53,7 @@ impl App {
             result: "Write a query, then press ctrl+r".into(),
             sender,
             receiver,
+            cancel: Arc::default(),
         })
     }
 
@@ -59,6 +62,7 @@ impl App {
         match (self.focus, key.code) {
             (_, KeyCode::Char('r')) if ctrl => self.run(),
             (_, KeyCode::Char('s')) if ctrl => self.save(),
+            (_, KeyCode::Esc) => self.cancel(),
             (_, KeyCode::Tab) => self.focus = self.focus.next(),
             (Focus::Databases, code) => step(&mut self.database, code),
             (Focus::Queries, KeyCode::Enter) => self.load(),
@@ -103,8 +107,9 @@ impl App {
         let runs = self.runs.parse().unwrap_or(1).max(1);
         let name = self.name.clone();
         let sender = self.sender.clone();
+        let cancel = self.cancel.clone();
         thread::spawn(move || {
-            let result = match db::benchmark(&database, &sql, runs, &sender) {
+            let result = match db::benchmark(&database, &sql, runs, &sender, &cancel) {
                 Ok(times) => {
                     let saved = history::save(&db::host(), &database, &name, &sql, &times);
                     let note = saved.err().map(|error| format!("\nhistory not saved: {error}")).unwrap_or_default();
@@ -114,6 +119,12 @@ impl App {
             };
             let _ = sender.send(result);
         });
+    }
+
+    fn cancel(&mut self) {
+        if let Some(token) = self.cancel.lock().unwrap().take() {
+            let _ = token.cancel_query(postgres::NoTls);
+        }
     }
 
     fn draw(&mut self, frame: &mut Frame) {
