@@ -20,6 +20,7 @@ enum Focus {
     Queries,
     Name,
     Runs,
+    Warmup,
     Editor,
 }
 
@@ -31,6 +32,7 @@ struct App {
     query: ListState,
     name: String,
     runs: String,
+    warmup: String,
     editor: TextArea<'static>,
     result: String,
     sender: Sender<String>,
@@ -49,6 +51,7 @@ impl App {
             query: ListState::default().with_selected(Some(0)),
             name: String::new(),
             runs: "10".into(),
+            warmup: "1".into(),
             editor: editor(""),
             result: "Write a query, then press ctrl+r".into(),
             sender,
@@ -68,8 +71,9 @@ impl App {
             (Focus::Queries, KeyCode::Enter) => self.load(),
             (Focus::Queries, code) => step(&mut self.query, code),
             (Focus::Name, code) => edit(&mut self.name, code),
-            (Focus::Runs, KeyCode::Char(c)) if !c.is_ascii_digit() => {}
+            (Focus::Runs | Focus::Warmup, KeyCode::Char(c)) if !c.is_ascii_digit() => {}
             (Focus::Runs, code) => edit(&mut self.runs, code),
+            (Focus::Warmup, code) => edit(&mut self.warmup, code),
             (Focus::Editor, _) => drop(self.editor.input(key)),
         }
     }
@@ -105,11 +109,12 @@ impl App {
         let database = self.selected_database();
         let sql = self.editor.lines().join("\n");
         let runs = self.runs.parse().unwrap_or(1).max(1);
+        let warmup = self.warmup.parse().unwrap_or(0);
         let name = self.name.clone();
         let sender = self.sender.clone();
         let cancel = self.cancel.clone();
         thread::spawn(move || {
-            let result = match db::benchmark(&database, &sql, runs, &sender, &cancel) {
+            let result = match db::benchmark(&database, &sql, warmup, runs, &sender, &cancel) {
                 Ok(times) => {
                     let saved = history::save(&db::host(), &database, &name, &sql, &times);
                     let note = saved.err().map(|error| format!("\nhistory not saved: {error}")).unwrap_or_default();
@@ -133,7 +138,8 @@ impl App {
         let [databases, queries] = Layout::vertical([Constraint::Fill(1), Constraint::Fill(1)]).areas(left);
         let [inputs, sql, result] =
             Layout::vertical([Constraint::Length(3), Constraint::Min(0), Constraint::Length(6)]).areas(right);
-        let [name, runs] = Layout::horizontal([Constraint::Min(0), Constraint::Length(12)]).areas(inputs);
+        let [name, runs, warmup] =
+            Layout::horizontal([Constraint::Min(0), Constraint::Length(12), Constraint::Length(12)]).areas(inputs);
 
         let focus = self.focus;
         let block = |title: &str, pane| {
@@ -151,6 +157,7 @@ impl App {
         list(frame, &self.queries, &mut self.query, queries, block("Queries", Focus::Queries));
         frame.render_widget(Paragraph::new(self.name.as_str()).block(block("Query name", Focus::Name)), name);
         frame.render_widget(Paragraph::new(self.runs.as_str()).block(block("Runs", Focus::Runs)), runs);
+        frame.render_widget(Paragraph::new(self.warmup.as_str()).block(block("Warmup", Focus::Warmup)), warmup);
         self.editor.set_block(block(&format!("SQL on {}", self.selected_database()), Focus::Editor));
         frame.render_widget(&self.editor, sql);
         let output = Paragraph::new(self.result.as_str()).wrap(Wrap { trim: false });
@@ -165,7 +172,8 @@ impl Focus {
             Focus::Databases => Focus::Queries,
             Focus::Queries => Focus::Name,
             Focus::Name => Focus::Runs,
-            Focus::Runs => Focus::Editor,
+            Focus::Runs => Focus::Warmup,
+            Focus::Warmup => Focus::Editor,
             Focus::Editor => Focus::Databases,
         }
     }

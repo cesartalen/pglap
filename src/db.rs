@@ -27,12 +27,17 @@ pub fn list_databases() -> Result<Vec<String>, Error> {
 pub fn benchmark(
     database: &str,
     sql: &str,
+    warmup: usize,
     runs: usize,
     progress: &Sender<String>,
     cancel: &Mutex<Option<CancelToken>>,
 ) -> Result<Vec<f64>, Error> {
     let mut client = connect(database)?;
     *cancel.lock().unwrap() = Some(client.cancel_token());
+    for run in 1..=warmup {
+        client.simple_query(sql)?;
+        let _ = progress.send(format!("warmup {run}/{warmup}"));
+    }
     let mut times = Vec::new();
     for run in 1..=runs {
         let start = Instant::now();
