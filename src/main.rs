@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::{error::Error, fs, thread, time::Duration};
 
 const QUERIES: &str = "queries";
+const HEADER: &str = "-- pglap: ";
 const HELP: &str = " tab: focus   enter: load query   ctrl+r: run   ctrl+h: history   esc: cancel   ctrl+s: save   ctrl+q: quit";
 
 #[derive(Clone, Copy, PartialEq)]
@@ -92,9 +93,17 @@ impl App {
 
     fn load(&mut self) {
         let Some(name) = self.query.selected().and_then(|i| self.queries.get(i)) else { return };
-        let sql = fs::read_to_string(format!("{QUERIES}/{name}.sql")).unwrap_or_default();
+        let file = fs::read_to_string(format!("{QUERIES}/{name}.sql")).unwrap_or_default();
+        let (settings, sql) = file.strip_prefix(HEADER).and_then(|rest| rest.split_once('\n')).unwrap_or(("", &file));
+        for (key, value) in settings.split_whitespace().filter_map(|pair| pair.split_once('=')) {
+            match key {
+                "runs" => self.runs = value.into(),
+                "warmup" => self.warmup = value.into(),
+                _ => {}
+            }
+        }
         self.name = name.clone();
-        self.editor = editor(&sql);
+        self.editor = editor(sql);
         self.focus = Focus::Editor;
     }
 
@@ -103,8 +112,8 @@ impl App {
             self.result = "Give the query a name first".into();
             return;
         }
-        let saved = fs::create_dir_all(QUERIES)
-            .and_then(|_| fs::write(format!("{QUERIES}/{}.sql", self.name), self.editor.lines().join("\n")));
+        let file = format!("{HEADER}runs={} warmup={}\n{}", self.runs, self.warmup, self.editor.lines().join("\n"));
+        let saved = fs::create_dir_all(QUERIES).and_then(|_| fs::write(format!("{QUERIES}/{}.sql", self.name), file));
         self.result = match saved {
             Ok(()) => format!("Saved {}", self.name),
             Err(error) => error.to_string(),
