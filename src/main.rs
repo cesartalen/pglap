@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::{error::Error, fs, thread, time::Duration};
 
 const QUERIES: &str = "queries";
-const HELP: &str = " tab: focus   enter: load query   ctrl+r: run   esc: cancel   ctrl+s: save   ctrl+q: quit";
+const HELP: &str = " tab: focus   enter: load query   ctrl+r: run   ctrl+h: history   esc: cancel   ctrl+s: save   ctrl+q: quit";
 
 #[derive(Clone, Copy, PartialEq)]
 enum Focus {
@@ -35,6 +35,8 @@ struct App {
     warmup: String,
     editor: TextArea<'static>,
     result: String,
+    history: Option<Vec<String>>,
+    past_run: ListState,
     sender: Sender<String>,
     receiver: Receiver<String>,
     cancel: Arc<Mutex<Option<postgres::CancelToken>>>,
@@ -54,6 +56,8 @@ impl App {
             warmup: "1".into(),
             editor: editor(""),
             result: "Write a query, then press ctrl+r".into(),
+            history: None,
+            past_run: ListState::default().with_selected(Some(0)),
             sender,
             receiver,
             cancel: Arc::default(),
@@ -65,7 +69,10 @@ impl App {
         match (self.focus, key.code) {
             (_, KeyCode::Char('r')) if ctrl => self.run(),
             (_, KeyCode::Char('s')) if ctrl => self.save(),
+            (_, KeyCode::Char('h')) if ctrl => self.toggle_history(),
+            (_, KeyCode::Esc) if self.history.is_some() => self.history = None,
             (_, KeyCode::Esc) => self.cancel(),
+            (_, code) if self.history.is_some() => step(&mut self.past_run, code),
             (_, KeyCode::Tab) => self.focus = self.focus.next(),
             (Focus::Databases, code) => step(&mut self.database, code),
             (Focus::Queries, KeyCode::Enter) => self.load(),
@@ -126,6 +133,19 @@ impl App {
         });
     }
 
+    fn toggle_history(&mut self) {
+        if self.history.take().is_some() {
+            return;
+        }
+        match history::list(&self.name) {
+            Ok(runs) => {
+                let format = |run: history::Run| format!("{}  {}  {}", run.created_at, run.database, db::summary(run.times));
+                self.history = Some(runs.into_iter().map(format).collect());
+            }
+            Err(error) => self.result = error.to_string(),
+        }
+    }
+
     fn cancel(&mut self) {
         if let Some(token) = self.cancel.lock().unwrap().take() {
             let _ = token.cancel_query(postgres::NoTls);
@@ -158,8 +178,16 @@ impl App {
         frame.render_widget(Paragraph::new(self.name.as_str()).block(block("Query name", Focus::Name)), name);
         frame.render_widget(Paragraph::new(self.runs.as_str()).block(block("Runs", Focus::Runs)), runs);
         frame.render_widget(Paragraph::new(self.warmup.as_str()).block(block("Warmup", Focus::Warmup)), warmup);
-        self.editor.set_block(block(&format!("SQL on {}", self.selected_database()), Focus::Editor));
-        frame.render_widget(&self.editor, sql);
+        match &self.history {
+            Some(runs) => {
+                let title = Block::bordered().title(format!("History of {}", self.name)).border_style(Color::Yellow);
+                list(frame, runs, &mut self.past_run, sql, title);
+            }
+            None => {
+                self.editor.set_block(block(&format!("SQL on {}", self.selected_database()), Focus::Editor));
+                frame.render_widget(&self.editor, sql);
+            }
+        }
         let output = Paragraph::new(self.result.as_str()).wrap(Wrap { trim: false });
         frame.render_widget(output.block(Block::bordered().title("Result")), result);
         frame.render_widget(Paragraph::new(HELP).style(Color::DarkGray), help);

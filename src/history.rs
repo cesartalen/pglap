@@ -41,3 +41,21 @@ pub fn save(host: &str, database: &str, query_name: &str, sql: &str, times: &[f6
     transaction.commit()?;
     Ok(())
 }
+
+pub struct Run {
+    pub created_at: String,
+    pub database: String,
+    pub times: Vec<f64>,
+}
+
+pub fn list(query_name: &str) -> Result<Vec<Run>, Box<dyn Error>> {
+    let connection = open()?;
+    let mut timings = connection.prepare("select ms from timings where run_id = ?1 order by n")?;
+    let mut runs =
+        connection.prepare("select id, created_at, database from runs where query_name = ?1 order by id desc")?;
+    let rows = runs.query_map([query_name], |row| {
+        let times = timings.query_map([row.get::<_, i64>(0)?], |row| row.get(0))?.collect::<Result<_, _>>()?;
+        Ok(Run { created_at: row.get(1)?, database: row.get(2)?, times })
+    })?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
